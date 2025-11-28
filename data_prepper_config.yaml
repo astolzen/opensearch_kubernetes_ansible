@@ -1,0 +1,94 @@
+---
+# OpenSearch Data Prepper Pipeline Configuration
+# Processes logs from Kafka topics and sends to OpenSearch
+
+# Pipeline for Journal logs from systemd units
+journals-pipeline:
+  source:
+    kafka:
+      topics:
+        - name: journals
+          group_id: data-prepper-journals
+          auto_offset_reset: earliest
+          session_timeout: 45s
+      bootstrap_servers:
+        - "<< Kafka broker IP:port >>"
+      encryption:
+        type: none
+  processor:
+    - date:
+        from_time_received: true
+        destination: "@timestamp"
+    - add_entries:
+        entries:
+          - key: "data_prepper.pipeline"
+            value: "journals"
+    - rename_keys:
+        entries:
+          - from_key: "message"
+            to_key: "log.message"
+            overwrite_if_to_key_exists: true
+    - parse_json:
+        source: "log.message"
+        destination: null
+        delete_source: true
+  sink:
+    - opensearch:
+        hosts: 
+          - "http://opensearch.opensearch-cluster.svc.cluster.local:9200"
+        index_type: custom
+        index: "journals-%{yyyy.MM.dd}"
+        bulk_size: 4
+        flush_timeout: 60000
+        dlq_file: "/var/log/data-prepper/journals-dlq.log"
+
+# Pipeline for Pi-hole logs
+pihole-pipeline:
+  source:
+    kafka:
+      topics:
+        - name: pihole
+          group_id: data-prepper-pihole
+          auto_offset_reset: earliest
+          session_timeout: 45s
+      bootstrap_servers:
+        - "<< Kafka broker IP:port >>"
+      encryption:
+        type: none
+  processor:
+    - date:
+        from_time_received: true
+        destination: "@timestamp"
+    - add_entries:
+        entries:
+          - key: "data_prepper.pipeline"
+            value: "pihole"
+          - key: "application"
+            value: "pihole"
+    - rename_keys:
+        entries:
+          - from_key: "message"
+            to_key: "log.message"
+            overwrite_if_to_key_exists: true
+    - parse_json:
+        source: "log.message"
+        destination: null
+        delete_source: true
+    - grok:
+        match:
+          message:
+            - 'query\[(?:A|AAAA)\]\s+%{NOTSPACE:dns_queried_system}\s+from\s+%{IP:dns_query_from}'
+            - 'gravity blocked %{NOTSPACE:dns_queried_system} is %{NOTSPACE:dns_query_blocked_response}'
+            - '(?:reply|cached|cached-stale)\s+%{NOTSPACE:dns_queried_system}\s+is\s+%{IP:dns_queried_system_ip}'
+        keep_empty_captures: false
+        tags_on_match_failure: []
+  sink:
+    - opensearch:
+        hosts: 
+          - "http://opensearch.opensearch-cluster.svc.cluster.local:9200"
+        index_type: custom
+        index: "pihole-%{yyyy.MM.dd}"
+        bulk_size: 4
+        flush_timeout: 60000
+        dlq_file: "/var/log/data-prepper/pihole-dlq.log"
+

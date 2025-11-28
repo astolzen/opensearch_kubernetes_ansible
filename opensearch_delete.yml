@@ -1,0 +1,104 @@
+---
+- name: Delete OpenSearch Resources (Preserve PV/PVC)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    kubeconfig: "<< Path to your kubeconfig file >>"
+    opensearch_ns: "opensearch-cluster"
+
+  tasks:
+    - name: Delete Ingress for OpenSearch Dashboard
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: networking.k8s.io/v1
+        kind: Ingress
+        name: opensearch-dashboard-ingress
+        namespace: "{{ opensearch_ns }}"
+
+    - name: Delete OpenSearch Dashboard Service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: v1
+        kind: Service
+        name: opensearch-dashboards
+        namespace: "{{ opensearch_ns }}"
+
+    - name: Delete OpenSearch Dashboard Deployment
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        name: opensearch-dashboards
+        namespace: "{{ opensearch_ns }}"
+
+    - name: Delete OpenSearch Service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: v1
+        kind: Service
+        name: opensearch
+        namespace: "{{ opensearch_ns }}"
+
+    - name: Delete OpenSearch Deployment
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        name: opensearch
+        namespace: "{{ opensearch_ns }}"
+
+    - name: Delete OpenSearch ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: v1
+        kind: ConfigMap
+        name: opensearch-config
+        namespace: "{{ opensearch_ns }}"
+
+    # Note: PVC and PV are intentionally NOT deleted to preserve data
+    # Note: Namespace is NOT deleted since it contains the PVC
+
+    - name: Wait for Deployments to be fully deleted
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ opensearch_ns }}"
+        name: "{{ item }}"
+      register: deployment_info
+      until: deployment_info.resources | length == 0
+      retries: 30
+      delay: 2
+      loop:
+        - opensearch
+        - opensearch-dashboards
+
+    - name: Display deletion status
+      ansible.builtin.debug:
+        msg: |
+          OpenSearch resources deleted successfully!
+
+          Namespace: {{ opensearch_ns }} (PRESERVED)
+          PVC: opensearch-data (PRESERVED)
+          PV: Associated PersistentVolume (PRESERVED)
+
+          Deleted resources:
+            - Ingress: opensearch-dashboard-ingress
+            - Service: opensearch-dashboards
+            - Service: opensearch
+            - Deployment: opensearch-dashboards
+            - Deployment: opensearch
+            - ConfigMap: opensearch-config
+
+          To completely remove the namespace and data:
+          kubectl delete pvc opensearch-data -n {{ opensearch_ns }}
+          kubectl delete namespace {{ opensearch_ns }}
+

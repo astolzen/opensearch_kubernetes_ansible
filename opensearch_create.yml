@@ -1,0 +1,322 @@
+---
+- name: Deploy OpenSearch Single Node without Operator
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    kubeconfig: "<< Path to your kubeconfig file >>"
+    opensearch_ns: "opensearch-cluster"
+    cluster_name: "opensearch-single"
+    opensearch_version: "3.3.2"
+    dashboard_version: "3.3.0"
+
+  tasks:
+    - name: Create OpenSearch Namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ opensearch_ns }}"
+
+    - name: Create OpenSearch PVC
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: opensearch-data
+            namespace: "{{ opensearch_ns }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 25Gi
+
+    - name: Create OpenSearch ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: opensearch-config
+            namespace: "{{ opensearch_ns }}"
+          data:
+            opensearch.yml: |
+              cluster.name: opensearch-cluster
+              node.name: opensearch-single-node
+              discovery.type: single-node
+              network.host: 0.0.0.0
+              http.port: 9200
+              transport.port: 9300
+              node.store.allow_mmap: false
+              plugins.security.disabled: true
+
+    - name: Deploy OpenSearch Pod
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: opensearch
+            namespace: "{{ opensearch_ns }}"
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: opensearch
+            template:
+              metadata:
+                labels:
+                  app: opensearch
+              spec:
+                initContainers:
+                  - name: sysctl
+                    image: busybox:latest
+                    securityContext:
+                      privileged: true
+                    command:
+                      - sh
+                      - -c
+                      - |
+                        sysctl -w vm.max_map_count=262144
+                        echo "vm.max_map_count set to 262144"
+                  - name: fix-permissions
+                    image: busybox:latest
+                    command:
+                      - sh
+                      - -c
+                      - |
+                        chown -R 1000:1000 /usr/share/opensearch/data
+                        chmod -R 755 /usr/share/opensearch/data
+                    volumeMounts:
+                      - name: opensearch-data
+                        mountPath: /usr/share/opensearch/data
+                containers:
+                  - name: opensearch
+                    image: opensearchproject/opensearch:{{ opensearch_version }}
+                    ports:
+                      - containerPort: 9200
+                        name: http
+                      - containerPort: 9300
+                        name: transport
+                    env:
+                      - name: DISABLE_INSTALL_DEMO_CONFIG
+                        value: "true"
+                      - name: DISABLE_SECURITY_PLUGIN
+                        value: "true"
+                      - name: discovery.type
+                        value: single-node
+                    volumeMounts:
+                      - name: opensearch-data
+                        mountPath: /usr/share/opensearch/data
+                      - name: opensearch-config
+                        mountPath: /usr/share/opensearch/config/opensearch.yml
+                        subPath: opensearch.yml
+                volumes:
+                  - name: opensearch-data
+                    persistentVolumeClaim:
+                      claimName: opensearch-data
+                  - name: opensearch-config
+                    configMap:
+                      name: opensearch-config
+
+    - name: Create OpenSearch Service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: opensearch
+            namespace: "{{ opensearch_ns }}"
+          spec:
+            selector:
+              app: opensearch
+            ports:
+              - name: http
+                port: 9200
+                targetPort: 9200
+              - name: transport
+                port: 9300
+                targetPort: 9300
+
+    - name: Deploy OpenSearch Dashboard
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: opensearch-dashboards
+            namespace: "{{ opensearch_ns }}"
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: opensearch-dashboards
+            template:
+              metadata:
+                labels:
+                  app: opensearch-dashboards
+              spec:
+                containers:
+                  - name: opensearch-dashboards
+                    image: opensearchproject/opensearch-dashboards:{{ dashboard_version }}
+                    ports:
+                      - containerPort: 5601
+                        name: http
+                    env:
+                      - name: OPENSEARCH_HOSTS
+                        value: "http://opensearch:9200"
+                      - name: DISABLE_SECURITY_DASHBOARDS_PLUGIN
+                        value: "true"
+
+    - name: Create OpenSearch Dashboard Service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: opensearch-dashboards
+            namespace: "{{ opensearch_ns }}"
+          spec:
+            selector:
+              app: opensearch-dashboards
+            ports:
+              - name: http
+                port: 5601
+                targetPort: 5601
+
+    - name: Create Ingress for OpenSearch Dashboard
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: opensearch-dashboard-ingress
+            namespace: "{{ opensearch_ns }}"
+          spec:
+            rules:
+              - host: << Your OpenSearch Dashboard domain >>
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: opensearch-dashboards
+                          port:
+                            number: 5601
+
+    - name: Wait for OpenSearch to be ready
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Pod
+        namespace: "{{ opensearch_ns }}"
+        label_selectors:
+          - app=opensearch
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+
+    - name: Wait for OpenSearch API to be responsive
+      ansible.builtin.shell: |
+        kubectl --kubeconfig={{ kubeconfig }} exec -n {{ opensearch_ns }} deployment/opensearch -- curl -s -o /dev/null -w "%{http_code}" http://localhost:9200/_cluster/health
+      register: opensearch_health
+      until: opensearch_health.stdout == "200"
+      retries: 30
+      delay: 2
+
+    - name: Create GeoIP Ingest Pipeline for DNS Resolution Data
+      ansible.builtin.shell: |
+        kubectl --kubeconfig={{ kubeconfig }} exec -n {{ opensearch_ns }} deployment/opensearch -- curl -X PUT "http://localhost:9200/_ingest/pipeline/geoip-pipeline" -H 'Content-Type: application/json' -d '{
+          "description": "Add geoip info for DNS resolved IPs",
+          "processors": [
+            {
+              "geoip": {
+                "field": "dns_queried_system_ip",
+                "target_field": "dns_queried_system_geoip",
+                "ignore_missing": true,
+                "properties": ["continent_name", "country_iso_code", "country_name", "region_name", "city_name", "location"]
+              }
+            },
+            {
+              "script": {
+                "description": "Convert location object to geo_point format",
+                "lang": "painless",
+                "source": "if (ctx.dns_queried_system_geoip?.location?.lat != null && ctx.dns_queried_system_geoip?.location?.lon != null) { ctx.dns_queried_system_geoip.location = ctx.dns_queried_system_geoip.location.lat + \",\" + ctx.dns_queried_system_geoip.location.lon; }",
+                "ignore_failure": true
+              }
+            }
+          ]
+        }'
+      register: geoip_pipeline_result
+      changed_when: geoip_pipeline_result.rc == 0
+
+    - name: Create Index Template to Auto-Apply GeoIP Pipeline to pihole indices
+      ansible.builtin.shell: |
+        kubectl --kubeconfig={{ kubeconfig }} exec -n {{ opensearch_ns }} deployment/opensearch -- curl -X PUT "http://localhost:9200/_index_template/pihole-geoip-template" -H 'Content-Type: application/json' -d '{
+          "index_patterns": ["pihole-*"],
+          "priority": 100,
+          "template": {
+            "settings": {
+              "index.default_pipeline": "geoip-pipeline"
+            },
+            "mappings": {
+              "properties": {
+                "dns_queried_system_geoip": {
+                  "properties": {
+                    "location": {
+                      "type": "geo_point"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }'
+      register: index_template_result
+      changed_when: index_template_result.rc == 0
+
+    - name: Display OpenSearch access information
+      ansible.builtin.debug:
+        msg: |
+          OpenSearch deployed successfully without operator!
+
+          Cluster Name: {{ cluster_name }}
+          Namespace: {{ opensearch_ns }}
+
+          To access OpenSearch:
+          kubectl port-forward svc/opensearch 9200:9200 -n {{ opensearch_ns }}
+          Then visit: http://localhost:9200
+
+          To access OpenSearch Dashboards:
+          Visit: http://<< Your OpenSearch Dashboard domain >>
+          Or: kubectl port-forward svc/opensearch-dashboards 5601:5601 -n {{ opensearch_ns }}
+
+          GeoIP Configuration:
+          - Ingest pipeline 'geoip-pipeline' created for DNS IP geolocation
+          - Index template 'pihole-geoip-template' configured to auto-apply GeoIP to pihole-* indices
+          - DNS resolution IPs will be enriched with location data (country, city, coordinates)
+
+          No authentication required (security disabled for simplicity)

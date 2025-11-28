@@ -1,0 +1,198 @@
+---
+- name: Deploy OpenSearch Data Prepper with Kafka Integration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    kubeconfig: "<< Path to your kubeconfig file >>"
+    opensearch_ns: "opensearch-cluster"
+    data_prepper_version: "2.12.2"
+    data_prepper_config_file: "data_prepper_config.yaml"
+
+  tasks:
+    - name: Check if OpenSearch namespace exists
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Namespace
+        name: "{{ opensearch_ns }}"
+      register: namespace_check
+
+    - name: Fail if OpenSearch namespace does not exist
+      ansible.builtin.fail:
+        msg: "Namespace {{ opensearch_ns }} does not exist. Please run opensearch_create.yml first."
+      when: namespace_check.resources | length == 0
+
+    - name: Read Data Prepper configuration file
+      ansible.builtin.slurp:
+        src: "{{ data_prepper_config_file }}"
+      register: data_prepper_config_content
+
+    - name: Create Data Prepper ConfigMap
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: data-prepper-config
+            namespace: "{{ opensearch_ns }}"
+          data:
+            pipelines.yaml: "{{ data_prepper_config_content.content | b64decode }}"
+            data-prepper-config.yaml: |
+              ssl: false
+              
+    - name: Create Data Prepper Service Account
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: data-prepper
+            namespace: "{{ opensearch_ns }}"
+
+    - name: Deploy Data Prepper
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: data-prepper
+            namespace: "{{ opensearch_ns }}"
+            labels:
+              app: data-prepper
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: data-prepper
+            template:
+              metadata:
+                labels:
+                  app: data-prepper
+              spec:
+                serviceAccountName: data-prepper
+                containers:
+                  - name: data-prepper
+                    image: opensearchproject/data-prepper:{{ data_prepper_version }}
+                    imagePullPolicy: IfNotPresent
+                    ports:
+                      - containerPort: 4900
+                        name: metrics
+                        protocol: TCP
+                    env:
+                      - name: JAVA_OPTS
+                        value: "-Xms512m -Xmx512m"
+                    volumeMounts:
+                      - name: config
+                        mountPath: /usr/share/data-prepper/pipelines/pipelines.yaml
+                        subPath: pipelines.yaml
+                      - name: config
+                        mountPath: /usr/share/data-prepper/config/data-prepper-config.yaml
+                        subPath: data-prepper-config.yaml
+                      - name: log-dir
+                        mountPath: /var/log/data-prepper
+                    resources:
+                      requests:
+                        memory: "512Mi"
+                        cpu: "250m"
+                      limits:
+                        memory: "1Gi"
+                        cpu: "1000m"
+                    livenessProbe:
+                      httpGet:
+                        path: /list
+                        port: 4900
+                      initialDelaySeconds: 60
+                      periodSeconds: 30
+                      timeoutSeconds: 5
+                      failureThreshold: 3
+                    readinessProbe:
+                      httpGet:
+                        path: /list
+                        port: 4900
+                      initialDelaySeconds: 30
+                      periodSeconds: 10
+                      timeoutSeconds: 5
+                      failureThreshold: 3
+                volumes:
+                  - name: config
+                    configMap:
+                      name: data-prepper-config
+                  - name: log-dir
+                    emptyDir: {}
+
+    - name: Create Data Prepper Service (for metrics)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: data-prepper
+            namespace: "{{ opensearch_ns }}"
+            labels:
+              app: data-prepper
+          spec:
+            selector:
+              app: data-prepper
+            ports:
+              - name: metrics
+                port: 4900
+                targetPort: 4900
+                protocol: TCP
+            type: ClusterIP
+
+    - name: Wait for Data Prepper to be ready
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Pod
+        namespace: "{{ opensearch_ns }}"
+        label_selectors:
+          - app=data-prepper
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+      register: data_prepper_pod
+
+    - name: Display Data Prepper deployment information
+      ansible.builtin.debug:
+        msg: |
+          OpenSearch Data Prepper deployed successfully!
+
+          Namespace: {{ opensearch_ns }}
+          Deployment: data-prepper
+          Version: {{ data_prepper_version }}
+
+          Kafka Configuration:
+          - Server: << Kafka broker IP:port >>
+          - Topics:
+            * journals (systemd journal logs)
+            * pihole (Pi-hole DNS logs)
+
+          OpenSearch Integration:
+          - Target: http://opensearch.opensearch-cluster.svc.cluster.local:9200
+          - Indices:
+            * journals-YYYY.MM.DD (daily rotation)
+            * pihole-YYYY.MM.DD (daily rotation)
+
+          To check Data Prepper status:
+          kubectl logs -f deployment/data-prepper -n {{ opensearch_ns }}
+
+          To check Data Prepper metrics:
+          kubectl port-forward svc/data-prepper 4900:4900 -n {{ opensearch_ns }}
+          Then visit: http://localhost:4900/metrics/prometheus
+
+          Data flow:
+          Kafka << Kafka broker IP:port >> → Data Prepper → OpenSearch → OpenSearch Dashboards
+
