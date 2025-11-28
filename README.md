@@ -15,7 +15,7 @@ This project provides automated deployment of a comprehensive DNS analytics plat
 
 ```
 ┌─────────────┐      ┌─────────┐      ┌──────────────┐      ┌────────────┐      ┌──────────────┐
-│  Filebeat   │─────▶│  Kafka  │─────▶│ Data Prepper │─────▶│ OpenSearch │─────▶│  Dashboards  │
+│  Filebeat   │─────>│  Kafka  │─────>│ Data Prepper │─────>│ OpenSearch │─────>│  Dashboards  │
 │  (Pi-hole)  │      │ Topics  │      │  Pipelines   │      │   Indices  │      │     Maps     │
 └─────────────┘      └─────────┘      └──────────────┘      └────────────┘      └──────────────┘
   - journals            - journals       - JSON parsing        - journals-*        - DNS queries
