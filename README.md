@@ -2,6 +2,8 @@
 
 Complete DNS log analytics solution using OpenSearch, Data Prepper, Kafka, and Filebeat for real-time DNS query analysis and geolocation visualization.
 
+_AI Tools like Claude, Gemini, Ollama, qwen3-coder, gpt-oss, Continue and Cursor AI assisted in the generation of this Code and Documentation_
+
 ## Overview
 
 This project provides automated deployment of a comprehensive DNS analytics platform that:
