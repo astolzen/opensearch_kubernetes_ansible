@@ -64,11 +64,16 @@ This project provides automated deployment of a comprehensive DNS analytics plat
 
 ```
 kubernetes/opensearch/
-├── README.md                    # This file
-├── opensearch_create.yml        # Deploy OpenSearch + Dashboards + GeoIP
-├── opensearch_delete.yml        # Remove deployment (preserve PV/PVC)
-├── data_prepper_config.yaml     # Data Prepper pipeline configuration
-└── data_prepper_deploy.yml      # Deploy Data Prepper
+├── README.md                              # This file
+├── opensearch_create.yml                  # Deploy OpenSearch + Dashboards + GeoIP
+├── opensearch_delete.yml                  # Remove deployment (preserve PV/PVC)
+├── data_prepper_config.yaml               # Data Prepper pipeline configuration
+├── data_prepper_deploy.yml                # Deploy Data Prepper
+├── DASHBOARD_README.md                    # Dashboard documentation
+├── DASHBOARD_QUICKSTART.md                # Dashboard quick start guide
+├── dashboard_upload.yml                   # Upload dashboard to OpenSearch Dashboards
+├── dashboard_verify.yml                   # Verify dashboard prerequisites
+└── dashboard_pihole_geoip_simple.ndjson   # Dashboard definition file
 ```
 
 ## Deployment
@@ -107,6 +112,29 @@ ansible-playbook kubernetes/opensearch/opensearch_delete.yml
 ```
 
 **Note:** This preserves the PVC `opensearch-data` so you don't lose your data.
+
+### Dashboard Deployment
+
+After deploying OpenSearch and Data Prepper, you can deploy the pre-configured Pi-hole DNS GeoIP Dashboard:
+
+```bash
+# Verify prerequisites
+ansible-playbook kubernetes/opensearch/dashboard_verify.yml
+
+# Upload the dashboard
+ansible-playbook kubernetes/opensearch/dashboard_upload.yml
+```
+
+The dashboard provides:
+- **Interactive world map** showing geographic locations of DNS query IPs
+- **Recent DNS requests table** with domain, IP, country, and city information
+- **Top queried domains** bar chart
+- **Top countries** pie chart
+- **Regional country map** showing query distribution
+
+For detailed documentation, see:
+- **Quick Start**: [`DASHBOARD_QUICKSTART.md`](DASHBOARD_QUICKSTART.md)
+- **Full Documentation**: [`DASHBOARD_README.md`](DASHBOARD_README.md)
 
 ## Configuration
 
@@ -199,6 +227,13 @@ kubectl port-forward svc/opensearch 9200:9200 -n opensearch-cluster
 kubectl port-forward svc/data-prepper 4900:4900 -n opensearch-cluster
 # Then access: http://localhost:4900/metrics/prometheus
 ```
+
+### Pre-built Dashboard
+After deploying the dashboard using the playbooks above:
+- **Via Ingress**: http://<< Your OpenSearch Dashboard domain >> → Dashboard → "Pi-hole DNS GeoIP Dashboard"
+- **Via Port-forward**: http://localhost:5601 → Dashboard → "Pi-hole DNS GeoIP Dashboard"
+
+The dashboard includes interactive maps, data tables, and analytics for DNS queries with geographic information.
 
 ## Creating Visualizations
 

@@ -1,0 +1,141 @@
+---
+- name: Verify Pi-hole GeoIP Dashboard Prerequisites via OpenSearch Dashboards API
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    dashboards_url: "http://<< Your OpenSearch Dashboard domain >>"
+
+  tasks:
+    - name: Check if OpenSearch Dashboards is accessible
+      ansible.builtin.uri:
+        url: "{{ dashboards_url }}/api/status"
+        method: GET
+        timeout: 10
+        status_code: [200, 503]
+      register: dashboards_status
+      failed_when: false
+
+    - name: Display Dashboards status
+      ansible.builtin.debug:
+        msg: |
+          
+          ================================================================================
+          Checking OpenSearch Dashboards at {{ dashboards_url }}
+          ================================================================================
+          
+          {% if dashboards_status.status == 200 %}
+          ✓ OpenSearch Dashboards is accessible and ready
+          {% else %}
+          ✗ OpenSearch Dashboards is not accessible (status: {{ dashboards_status.status | default('N/A') }})
+          {% endif %}
+      
+    - name: Fail if Dashboards is not accessible
+      ansible.builtin.fail:
+        msg: |
+          OpenSearch Dashboards is not accessible at {{ dashboards_url }}
+          
+          Please verify:
+          - Dashboards pod is running
+          - Ingress is configured correctly
+          - Network connectivity to {{ dashboards_url }}
+      when: dashboards_status.status != 200
+
+    - name: Check if pihole index pattern exists
+      ansible.builtin.uri:
+        url: "{{ dashboards_url }}/api/saved_objects/index-pattern/pihole-*"
+        method: GET
+        timeout: 10
+        status_code: [200, 404]
+      register: index_pattern_check
+      failed_when: false
+
+    - name: Display index pattern status
+      ansible.builtin.debug:
+        msg: |
+          
+          {% if index_pattern_check.status == 200 %}
+          ✓ Index pattern 'pihole-*' exists in Dashboards
+          {% else %}
+          ℹ Index pattern 'pihole-*' not found (will be created during dashboard upload)
+          {% endif %}
+
+    - name: Check if dashboard already exists
+      ansible.builtin.uri:
+        url: "{{ dashboards_url }}/api/saved_objects/_find?type=dashboard&search=pihole"
+        method: GET
+        timeout: 10
+      register: dashboard_check
+      failed_when: false
+
+    - name: Display existing dashboards
+      ansible.builtin.debug:
+        msg: |
+          
+          Existing Pi-hole Dashboards:
+          {% if dashboard_check.json.total is defined and dashboard_check.json.total > 0 %}
+          Found {{ dashboard_check.json.total }} dashboard(s):
+          {% for item in dashboard_check.json.saved_objects %}
+          - {{ item.attributes.title | default(item.id) }}
+          {% endfor %}
+          
+          Note: Uploading will overwrite existing dashboard(s)
+          {% else %}
+          No existing Pi-hole dashboards found
+          {% endif %}
+
+    - name: Final verification summary
+      ansible.builtin.debug:
+        msg: |
+          
+          ================================================================================
+          Dashboard Verification Summary
+          ================================================================================
+          
+          OpenSearch Dashboards:
+          {% if dashboards_status.status == 200 %}
+          ✓ Accessible at {{ dashboards_url }}
+          ✓ API is responding
+          {% else %}
+          ✗ Not accessible
+          {% endif %}
+          
+          Index Patterns:
+          {% if index_pattern_check.status == 200 %}
+          ✓ 'pihole-*' index pattern exists
+          {% else %}
+          ℹ 'pihole-*' index pattern will be created during upload
+          {% endif %}
+          
+          Existing Dashboards:
+          {% if dashboard_check.json.total is defined and dashboard_check.json.total > 0 %}
+          Found {{ dashboard_check.json.total }} existing Pi-hole dashboard(s)
+          (will be overwritten during upload)
+          {% else %}
+          No existing Pi-hole dashboards found
+          {% endif %}
+          
+          ================================================================================
+          
+          {% if dashboards_status.status == 200 %}
+          ✅ READY TO PROCEED
+          
+          Next step:
+          ansible-playbook dashboard_upload.yml
+          
+          This will upload the Pi-hole DNS GeoIP Dashboard to:
+          {{ dashboards_url }}
+          
+          After upload, access via:
+          {{ dashboards_url }} → Dashboard → Pi-hole DNS GeoIP Dashboard
+          {% else %}
+          ❌ NOT READY
+          
+          Please ensure OpenSearch Dashboards is accessible at:
+          {{ dashboards_url }}
+          {% endif %}
+          
+          ================================================================================
+
+

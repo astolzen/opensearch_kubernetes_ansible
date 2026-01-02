@@ -1,0 +1,97 @@
+---
+- name: Upload Pi-hole GeoIP Dashboard to OpenSearch Dashboards
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # Choose which dashboard to upload:
+    # - dashboard_pihole_geoip_simple.ndjson (recommended - uses built-in visualizations)
+    # - dashboard_pihole_geoip.ndjson (advanced - uses Vega for custom map)
+    dashboard_file: "dashboard_pihole_geoip_simple.ndjson"
+    dashboards_url: "http://<< Your OpenSearch Dashboard domain >>"
+
+  tasks:
+    - name: Check if dashboard file exists
+      ansible.builtin.stat:
+        path: "{{ dashboard_file }}"
+      register: dashboard_file_stat
+      failed_when: not dashboard_file_stat.stat.exists
+
+    - name: Verify OpenSearch Dashboards is accessible
+      ansible.builtin.uri:
+        url: "{{ dashboards_url }}/api/status"
+        method: GET
+        timeout: 10
+        status_code: [200, 503]
+      register: dashboards_status
+      failed_when: false
+
+    - name: Display Dashboards status
+      ansible.builtin.debug:
+        msg: |
+          OpenSearch Dashboards Status: {{ dashboards_status.status | default('Not accessible') }}
+          {% if dashboards_status.status == 200 %}
+          ✓ Dashboards is accessible at {{ dashboards_url }}
+          {% else %}
+          ⚠ Warning: Dashboards may not be fully ready (status: {{ dashboards_status.status | default('N/A') }})
+          {% endif %}
+
+    - name: Upload dashboard using saved objects import API
+      ansible.builtin.shell: |
+        curl -X POST "{{ dashboards_url }}/api/saved_objects/_import?overwrite=true" \
+          -H "osd-xsrf: true" \
+          --form file=@{{ dashboard_file }}
+      register: upload_result
+      changed_when: upload_result.rc == 0
+      failed_when: false
+
+    - name: Display upload result
+      ansible.builtin.debug:
+        msg: "{{ upload_result.stdout }}"
+
+    - name: Verify upload was successful
+      ansible.builtin.assert:
+        that:
+          - upload_result.rc == 0
+          - "'successCount' in upload_result.stdout"
+        fail_msg: |
+          Dashboard upload failed. Check the output above for errors.
+          
+          Common issues:
+          - Make sure OpenSearch Dashboards is accessible at {{ dashboards_url }}
+          - Check that the index pattern 'pihole-*' has data
+          - Verify the dashboard file format is correct
+          - Ensure no network/firewall issues blocking access
+        success_msg: "✓ Dashboard uploaded successfully!"
+      ignore_errors: true
+
+    - name: Display access information
+      ansible.builtin.debug:
+        msg: |
+          ================================================================================
+          Pi-hole DNS GeoIP Dashboard Uploaded Successfully!
+          ================================================================================
+          
+          Dashboard Name: Pi-hole DNS GeoIP Dashboard
+          
+          Access the dashboard:
+          1. Visit: {{ dashboards_url }}
+          2. Click "Dashboard" in the left menu
+          3. Look for "Pi-hole DNS GeoIP Dashboard"
+          4. Click to open
+          
+          Features:
+          ✓ Interactive world map showing DNS query IP locations
+          ✓ Table with recent DNS requests (domain, IP, country, city)
+          ✓ Top domains bar chart
+          ✓ Top countries pie chart
+          ✓ Regional country map
+          ✓ Time range selector to filter data
+          
+          The dashboard uses data from pihole-* indices with GeoIP enrichment.
+          Make sure you have data in your pihole-* indices with geoip information!
+          
+          ================================================================================
+
+
